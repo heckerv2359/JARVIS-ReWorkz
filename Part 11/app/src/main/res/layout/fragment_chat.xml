@@ -33,7 +33,7 @@
         app:layout_constraintTop_toTopOf="@id/btnChatMenu"
         app:layout_constraintBottom_toBottomOf="@id/btnChatMenu"
         app:layout_constraintStart_toEndOf="@id/btnChatMenu"
-        app:layout_constraintEnd_toStartOf="@id/btnChatNew">
+        app:layout_constraintEnd_toStartOf="@id/btnChatList">
 
         <TextView
             android:id="@+id/tvChatTitle"
@@ -54,6 +54,32 @@
             android:textSize="12sp"
             android:fontFamily="sans-serif" />
     </LinearLayout>
+
+    <ImageButton
+        android:id="@+id/btnChatList"
+        android:layout_width="40dp"
+        android:layout_height="40dp"
+        android:layout_marginTop="2dp"
+        android:layout_marginEnd="6dp"
+        android:background="@drawable/bg_jarvis_icon_square"
+        android:src="@drawable/ic_history_chat"
+        app:tint="?attr/themeTextPrimary"
+        android:contentDescription="Chats"
+        app:layout_constraintTop_toTopOf="parent"
+        app:layout_constraintEnd_toStartOf="@id/btnChatSettings" />
+
+    <ImageButton
+        android:id="@+id/btnChatSettings"
+        android:layout_width="40dp"
+        android:layout_height="40dp"
+        android:layout_marginTop="2dp"
+        android:layout_marginEnd="6dp"
+        android:background="@drawable/bg_jarvis_icon_square"
+        android:src="@drawable/ic_tune_chat"
+        app:tint="?attr/themeTextPrimary"
+        android:contentDescription="Chat settings"
+        app:layout_constraintTop_toTopOf="parent"
+        app:layout_constraintEnd_toStartOf="@id/btnChatNew" />
 
     <ImageButton
         android:id="@+id/btnChatNew"
@@ -88,6 +114,21 @@
         android:background="@drawable/bg_jarvis_card"
         android:padding="14dp"
         app:layout_constraintBottom_toBottomOf="parent">
+
+        <HorizontalScrollView
+            android:id="@+id/scrollPending"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginBottom="8dp"
+            android:scrollbars="none"
+            android:visibility="gone">
+
+            <LinearLayout
+                android:id="@+id/layoutPending"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal" />
+        </HorizontalScrollView>
 
         <EditText
             android:id="@+id/etMessageInput"
@@ -132,6 +173,7 @@
                 <TextView
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
+                    android:id="@+id/tvChipPersona"
                     android:text="Jarvis"
                     android:textColor="?attr/themeTextPrimary"
                     android:textSize="12sp"
@@ -160,7 +202,8 @@
                 <TextView
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
-                    android:text="Code"
+                    android:id="@+id/tvChipMode"
+                    android:text="Chat"
                     android:textColor="?attr/themeTextPrimary"
                     android:textSize="12sp"
                     android:fontFamily="sans-serif-medium"
@@ -171,6 +214,17 @@
                 android:layout_width="0dp"
                 android:layout_height="1dp"
                 android:layout_weight="1" />
+
+            <!-- Dictate button: fills the box, never starts a call -->
+            <ImageButton
+                android:id="@+id/btnDictate"
+                android:layout_width="36dp"
+                android:layout_height="36dp"
+                android:background="@null"
+                android:src="@drawable/ic_mic_jarvis"
+                app:tint="?attr/themeTextSecondary"
+                android:layout_marginEnd="4dp"
+                android:contentDescription="Dictate" />
 
             <!-- Plus attachment button -->
             <ImageButton

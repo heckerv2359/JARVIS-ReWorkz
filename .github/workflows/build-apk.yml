@@ -2,7 +2,7 @@ name: Build JARVIS APK (Part 11)
 
 on:
   push:
-    branches: [ main ]
+    branches: [ main, chat-upgrade ]
     tags: [ "v*" ]
     paths:
       - "Part 11/**"
