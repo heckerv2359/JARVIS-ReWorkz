@@ -15,8 +15,11 @@ import java.io.File
 import java.util.concurrent.Executors
 
 /**
- * Holds every conversation. [turns] always shows the active conversation, so the voice service
- * (which calls [addTurn]) and the text chat share the same API.
+ * Holds every conversation.
+ *
+ * [uiTurns] is the full active conversation for the chat screen. [turns] is the same conversation
+ * without failed or still streaming replies, and is what the voice side reads, so an error message
+ * never reaches the voice AI as if it had said it.
  */
 class ChatRepository(private val preferences: AppPreferences) {
 
@@ -35,6 +38,9 @@ class ChatRepository(private val preferences: AppPreferences) {
 
     private val _turns = MutableStateFlow<List<ChatTurn>>(emptyList())
     val turns: StateFlow<List<ChatTurn>> = _turns.asStateFlow()
+
+    private val _uiTurns = MutableStateFlow<List<ChatTurn>>(emptyList())
+    val uiTurns: StateFlow<List<ChatTurn>> = _uiTurns.asStateFlow()
 
     private val _title = MutableStateFlow(DEFAULT_TITLE)
     val title: StateFlow<String> = _title.asStateFlow()
@@ -70,7 +76,8 @@ class ChatRepository(private val preferences: AppPreferences) {
 
     private fun publish() {
         val a = active()
-        _turns.value = a.turns
+        _uiTurns.value = a.turns
+        _turns.value = a.turns.filter { it.status != ChatStatus.ERROR && it.status != ChatStatus.STREAMING }
         _title.value = a.title
     }
 

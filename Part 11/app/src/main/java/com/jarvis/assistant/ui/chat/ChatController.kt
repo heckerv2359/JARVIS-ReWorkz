@@ -51,6 +51,15 @@ object ChatController {
 
         if (attachments.isEmpty() && handleMemoryCommand(clean)) return
 
+        // Facts told in the chat (favorite song, birthday and so on) are learned for the voice side too.
+        if (clean.isNotEmpty()) {
+            try {
+                app.memoryManager.learnPreferencesFromConversation(clean)
+            } catch (e: Exception) {
+                // learning is best effort
+            }
+        }
+
         val turn = repo.beginTurn(clean, attachments)
         run(context.applicationContext, turn.id, clean)
     }
