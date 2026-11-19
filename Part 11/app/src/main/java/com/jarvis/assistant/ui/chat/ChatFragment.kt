@@ -31,7 +31,6 @@ import com.jarvis.assistant.R
 import com.jarvis.assistant.data.model.ChatTurn
 import com.jarvis.assistant.databinding.FragmentChatBinding
 import com.jarvis.assistant.ui.home.MainActivity
-import com.jarvis.assistant.ui.home.MainViewModel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -47,7 +46,6 @@ class ChatFragment : Fragment() {
 
     private var _binding: FragmentChatBinding? = null
     private val binding get() = _binding!!
-    private val viewModel: MainViewModel get() = (requireActivity() as MainActivity).viewModel
     private val repo get() = JarvisApp.instance.chatRepository
 
     private val pending = ArrayList<String>()
@@ -483,7 +481,7 @@ class ChatFragment : Fragment() {
         viewLifecycleOwner.lifecycleScope.launch {
             viewLifecycleOwner.repeatOnLifecycle(Lifecycle.State.STARTED) {
                 launch {
-                    viewModel.chatTurns.collect { turns ->
+                    repo.uiTurns.collect { turns ->
                         val lm = binding.rvChatMessages.layoutManager as LinearLayoutManager
                         val before = chatAdapter.itemCount
                         val nearBottom = before == 0 || lm.findLastVisibleItemPosition() >= before - 2
@@ -520,7 +518,10 @@ class ChatFragment : Fragment() {
 
     override fun onHiddenChanged(hidden: Boolean) {
         super.onHiddenChanged(hidden)
-        if (hidden) historyPanel?.dismissNow()
+        if (hidden) {
+            historyPanel?.dismissNow()
+            backCallback.isEnabled = false
+        }
         if (!hidden && _binding != null) {
             binding.root.visibility = View.VISIBLE
             com.jarvis.assistant.util.ThemeManager.applyDynamicBackground(binding.root)
@@ -532,6 +533,7 @@ class ChatFragment : Fragment() {
     override fun onDestroyView() {
         historyPanel?.dismissNow()
         historyPanel = null
+        backCallback.isEnabled = false
         super.onDestroyView()
         _binding = null
     }
