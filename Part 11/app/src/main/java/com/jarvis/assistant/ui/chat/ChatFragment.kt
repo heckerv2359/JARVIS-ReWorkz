@@ -7,14 +7,17 @@ import android.graphics.drawable.GradientDrawable
 import android.net.Uri
 import android.os.Bundle
 import android.speech.RecognizerIntent
+import android.text.InputType
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
+import android.widget.EditText
 import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.PopupMenu
 import android.widget.TextView
 import android.widget.Toast
+import androidx.activity.OnBackPressedCallback
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AlertDialog
 import androidx.core.content.FileProvider
@@ -50,6 +53,14 @@ class ChatFragment : Fragment() {
     private val pending = ArrayList<String>()
     private var editingTurnId: String? = null
     private var cameraFile: File? = null
+    private var historyPanel: ChatHistoryPanel? = null
+
+    private val backCallback = object : OnBackPressedCallback(false) {
+        override fun handleOnBackPressed() {
+            historyPanel?.close()
+            isEnabled = false
+        }
+    }
 
     private val chatAdapter = JarvisChatAdapter(
         onEditUserMessage = { turn -> startEditing(turn) },
@@ -85,6 +96,14 @@ class ChatFragment : Fragment() {
         }
     }
 
+    private val createBackup = registerForActivityResult(ActivityResultContracts.CreateDocument("application/json")) { uri ->
+        if (uri != null) askPassphrase(true) { pass -> writeBackup(uri, pass) }
+    }
+
+    private val openBackup = registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri != null) askPassphrase(false) { pass -> readBackup(uri, pass) }
+    }
+
     override fun onCreateView(
         inflater: LayoutInflater,
         container: ViewGroup?,
@@ -103,6 +122,13 @@ class ChatFragment : Fragment() {
         }
         binding.rvChatMessages.adapter = chatAdapter
 
+        historyPanel = ChatHistoryPanel(
+            requireActivity(),
+            onChanged = { cancelEditing() },
+            onClosed = { backCallback.isEnabled = false }
+        )
+        requireActivity().onBackPressedDispatcher.addCallback(viewLifecycleOwner, backCallback)
+
         binding.btnSendMessage.setOnClickListener { onSendOrStop() }
 
         binding.btnChatNew.setOnClickListener {
@@ -113,16 +139,16 @@ class ChatFragment : Fragment() {
             toast("New chat started. Your old chat is saved in the Chats list.")
         }
 
-        binding.btnChatMenu.setOnClickListener {
-            (activity as? MainActivity)?.selectTab(MainActivity.TAB_HOME)
-        }
-
-        binding.btnChatList.setOnClickListener {
-            ChatDialogs.showConversations(requireContext()) { cancelEditing() }
-        }
+        binding.btnChatMenu.setOnClickListener { openHistory() }
+        binding.btnChatList.setOnClickListener { openHistory() }
 
         binding.btnChatSettings.setOnClickListener {
-            ChatDialogs.showSettings(requireContext()) { updateChips() }
+            ChatDialogs.showSettings(
+                requireContext(),
+                onBackup = { createBackup.launch("jarvis-backup.json") },
+                onRestore = { openBackup.launch(arrayOf("application/json", "text/plain", "application/octet-stream", "*/*")) },
+                onChanged = { updateChips() }
+            )
         }
 
         binding.chipPersona.setOnClickListener {
@@ -141,6 +167,12 @@ class ChatFragment : Fragment() {
         observeState()
     }
 
+    private fun openHistory() {
+        val panel = historyPanel ?: return
+        panel.open()
+        backCallback.isEnabled = panel.isOpen()
+    }
+
     private fun toast(text: String) {
         if (_binding != null || context != null) {
             Toast.makeText(requireContext().applicationContext, text, Toast.LENGTH_SHORT).show()
@@ -152,6 +184,88 @@ class ChatFragment : Fragment() {
         binding.tvChipPersona.text = ChatDialogs.personaLabel(JarvisApp.instance.preferences.personality)
         binding.tvChipMode.text = ChatPrefs.modeLabel()
         binding.tvChatSubtitle.text = "Text chat  \u2022  " + ChatPrefs.modeLabel()
+    }
+
+    // ---- backup and restore ----
+
+    private fun askPassphrase(creating: Boolean, onDone: (CharArray) -> Unit) {
+        val input = EditText(requireContext())
+        input.inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
+        input.hint = "Passphrase"
+        val pad = (20 * resources.displayMetrics.density).toInt()
+        val box = LinearLayout(requireContext())
+        box.setPadding(pad, pad / 2, pad, 0)
+        box.addView(input, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+        val message = if (creating) {
+            "Choose a passphrase of at least 6 characters. Your API key is stored inside the file, locked with it. If you forget the passphrase, the backup cannot be opened."
+        } else {
+            "Enter the passphrase you chose when you made this backup."
+        }
+        AlertDialog.Builder(requireContext())
+            .setTitle(if (creating) "Protect your backup" else "Backup passphrase")
+            .setMessage(message)
+            .setView(box)
+            .setPositiveButton("OK") { _, _ ->
+                val p = input.text.toString()
+                if (creating && p.length < 6) {
+                    toast("Use at least 6 characters.")
+                    askPassphrase(true, onDone)
+                } else if (p.isNotEmpty()) {
+                    onDone(p.toCharArray())
+                }
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
+    }
+
+    private fun writeBackup(uri: Uri, pass: CharArray) {
+        val appContext = requireContext().applicationContext
+        viewLifecycleOwner.lifecycleScope.launch {
+            val ok = withContext(Dispatchers.IO) {
+                try {
+                    val encrypted = BackupCrypto.encrypt(ChatBackup.buildPayload(), pass)
+                    val out = appContext.contentResolver.openOutputStream(uri, "wt")
+                    if (out == null) {
+                        false
+                    } else {
+                        out.use { it.write(encrypted.toByteArray(Charsets.UTF_8)) }
+                        true
+                    }
+                } catch (e: Exception) {
+                    false
+                }
+            }
+            toast(if (ok) "Backup saved. Keep the file somewhere safe, like Google Drive." else "Could not save the backup.")
+        }
+    }
+
+    private fun readBackup(uri: Uri, pass: CharArray) {
+        val appContext = requireContext().applicationContext
+        viewLifecycleOwner.lifecycleScope.launch {
+            val text = withContext(Dispatchers.IO) {
+                try {
+                    appContext.contentResolver.openInputStream(uri)?.use { it.readBytes().toString(Charsets.UTF_8) }
+                } catch (e: Exception) {
+                    null
+                }
+            }
+            if (text == null) {
+                toast("Could not read that file.")
+                return@launch
+            }
+            val plain = withContext(Dispatchers.IO) { BackupCrypto.decrypt(text, pass) }
+            if (plain == null) {
+                toast("Wrong passphrase, or this is not a JARVIS backup.")
+                return@launch
+            }
+            val summary = try {
+                ChatBackup.applyPayload(plain)
+            } catch (e: Exception) {
+                "The backup could not be applied."
+            }
+            toast(summary)
+            if (_binding != null) updateChips()
+        }
     }
 
     // ---- sending ----
@@ -406,6 +520,7 @@ class ChatFragment : Fragment() {
 
     override fun onHiddenChanged(hidden: Boolean) {
         super.onHiddenChanged(hidden)
+        if (hidden) historyPanel?.dismissNow()
         if (!hidden && _binding != null) {
             binding.root.visibility = View.VISIBLE
             com.jarvis.assistant.util.ThemeManager.applyDynamicBackground(binding.root)
@@ -415,6 +530,8 @@ class ChatFragment : Fragment() {
     }
 
     override fun onDestroyView() {
+        historyPanel?.dismissNow()
+        historyPanel = null
         super.onDestroyView()
         _binding = null
     }
