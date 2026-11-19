@@ -2,15 +2,12 @@ package com.jarvis.assistant.ui.chat
 
 import android.content.Context
 import android.content.Intent
-import android.text.Editable
 import android.text.InputType
-import android.text.TextWatcher
-import android.view.View
 import android.view.ViewGroup
 import android.widget.ArrayAdapter
+import android.widget.Button
 import android.widget.EditText
 import android.widget.LinearLayout
-import android.widget.ListView
 import android.widget.ScrollView
 import android.widget.SeekBar
 import android.widget.Spinner
@@ -65,7 +62,7 @@ object ChatDialogs {
             .show()
     }
 
-    fun showSettings(context: Context, onChanged: () -> Unit) {
+    fun showSettings(context: Context, onBackup: () -> Unit, onRestore: () -> Unit, onChanged: () -> Unit) {
         val builder = AlertDialog.Builder(context)
         val ctx = builder.context
         val d = ctx.resources.displayMetrics.density
@@ -150,10 +147,33 @@ object ChatDialogs {
         val customField = textField("e.g. Keep answers short. Explain like I am a beginner.", ChatPrefs.customInstructions, true)
         root.addView(customField)
 
+        root.addView(label("Backup"))
+        val backupHint = TextView(ctx)
+        backupHint.text = "Uninstalling the app deletes its data. Save a backup file to Downloads or Google Drive, then restore it after you reinstall. It holds your chats and API key, protected by a passphrase you choose."
+        backupHint.textSize = 12f
+        backupHint.alpha = 0.7f
+        root.addView(backupHint)
+        val backupBtn = Button(ctx)
+        backupBtn.text = "Back up chats and API key"
+        val restoreBtn = Button(ctx)
+        restoreBtn.text = "Restore from backup"
+        root.addView(backupBtn)
+        root.addView(restoreBtn)
+
         val scroll = ScrollView(ctx)
         scroll.addView(root, ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
 
-        builder.setTitle("Chat settings")
+        var dlg: AlertDialog? = null
+        backupBtn.setOnClickListener {
+            dlg?.dismiss()
+            onBackup()
+        }
+        restoreBtn.setOnClickListener {
+            dlg?.dismiss()
+            onRestore()
+        }
+
+        dlg = builder.setTitle("Chat settings")
             .setView(scroll)
             .setPositiveButton("Save") { _, _ ->
                 ChatPrefs.model = modelField.text.toString()
@@ -171,100 +191,7 @@ object ChatDialogs {
             .show()
     }
 
-    /** Lists every conversation with search, rename, pin, export and delete. */
-    fun showConversations(context: Context, onChanged: () -> Unit) {
-        val repo = JarvisApp.instance.chatRepository
-        val builder = AlertDialog.Builder(context)
-        val ctx = builder.context
-        val d = ctx.resources.displayMetrics.density
-        fun dp(v: Int) = (v * d).toInt()
-
-        val root = LinearLayout(ctx)
-        root.orientation = LinearLayout.VERTICAL
-        root.setPadding(dp(16), dp(8), dp(16), 0)
-
-        val search = EditText(ctx)
-        search.hint = "Search chats"
-        search.inputType = InputType.TYPE_CLASS_TEXT
-        search.maxLines = 1
-        root.addView(search)
-
-        val list = ListView(ctx)
-        var infos: List<ConversationInfo> = emptyList()
-        list.adapter = object : ArrayAdapter<String>(ctx, android.R.layout.simple_list_item_2, android.R.id.text1, ArrayList()) {
-            override fun getCount(): Int = infos.size
-            override fun getView(position: Int, convertView: View?, parent: ViewGroup): View {
-                val v = convertView ?: android.view.LayoutInflater.from(ctx).inflate(android.R.layout.simple_list_item_2, parent, false)
-                val info = infos[position]
-                val active = info.id == repo.activeConversationId()
-                v.findViewById<TextView>(android.R.id.text1).text =
-                    (if (info.pinned) "\uD83D\uDCCC " else "") + info.title + (if (active) "  (open)" else "")
-                v.findViewById<TextView>(android.R.id.text2).text =
-                    info.turnCount.toString() + " messages  " + info.preview
-                return v
-            }
-        }
-        root.addView(list, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(360)))
-
-        val dialog = builder.setTitle("Chats")
-            .setView(root)
-            .setNeutralButton("New chat") { _, _ ->
-                repo.newConversation()
-                onChanged()
-            }
-            .setNegativeButton("Close", null)
-            .create()
-
-        fun refresh() {
-            infos = repo.listConversations(search.text.toString())
-            (list.adapter as ArrayAdapter<*>).notifyDataSetChanged()
-        }
-        refresh()
-
-        search.addTextChangedListener(object : TextWatcher {
-            override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
-            override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {}
-            override fun afterTextChanged(s: Editable?) { refresh() }
-        })
-
-        list.setOnItemClickListener { _, _, position, _ ->
-            val info = infos.getOrNull(position) ?: return@setOnItemClickListener
-            repo.switchTo(info.id)
-            onChanged()
-            dialog.dismiss()
-        }
-
-        list.setOnItemLongClickListener { _, _, position, _ ->
-            val info = infos.getOrNull(position) ?: return@setOnItemLongClickListener true
-            val items = arrayOf("Rename", if (info.pinned) "Unpin" else "Pin to top", "Export as text", "Delete")
-            AlertDialog.Builder(ctx)
-                .setTitle(info.title)
-                .setItems(items) { _, which ->
-                    when (which) {
-                        0 -> promptRename(ctx, info) { refresh(); onChanged() }
-                        1 -> { repo.togglePin(info.id); refresh() }
-                        2 -> export(ctx, info.id)
-                        3 -> AlertDialog.Builder(ctx)
-                            .setTitle("Delete chat")
-                            .setMessage("Delete \"" + info.title + "\" and its attachments?")
-                            .setPositiveButton("Delete") { _, _ ->
-                                repo.delete(info.id)
-                                refresh()
-                                onChanged()
-                            }
-                            .setNegativeButton("Cancel", null)
-                            .show()
-                        else -> {}
-                    }
-                }
-                .show()
-            true
-        }
-
-        dialog.show()
-    }
-
-    private fun promptRename(ctx: Context, info: ConversationInfo, done: () -> Unit) {
+    fun promptRename(ctx: Context, info: ConversationInfo, done: () -> Unit) {
         val input = EditText(ctx)
         input.setText(info.title)
         input.setSelection(input.text.length)
@@ -284,7 +211,7 @@ object ChatDialogs {
             .show()
     }
 
-    private fun export(ctx: Context, id: String) {
+    fun exportChat(ctx: Context, id: String) {
         val text = JarvisApp.instance.chatRepository.exportText(id)
         if (text.isBlank()) {
             Toast.makeText(ctx, "This chat is empty.", Toast.LENGTH_SHORT).show()

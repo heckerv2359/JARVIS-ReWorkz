@@ -275,6 +275,45 @@ class ChatRepository(private val preferences: AppPreferences) {
         return sb.toString().trim()
     }
 
+    /** Every conversation as JSON for a backup. Attachments are left out because the files live on this phone only. */
+    @Synchronized
+    fun exportAllJson(): String {
+        val list = conversations.map { c ->
+            c.copy(
+                turns = c.turns.map { t ->
+                    t.copy(
+                        attachments = null,
+                        status = if (t.status == ChatStatus.STREAMING) null else t.status
+                    )
+                }
+            )
+        }
+        return gson.toJson(StoredChats(activeId, list))
+    }
+
+    /** Adds conversations from a backup that are not here yet. Returns how many were added. */
+    @Synchronized
+    fun importAllJson(json: String): Int {
+        val stored: StoredChats? = try {
+            gson.fromJson(json, StoredChats::class.java)
+        } catch (e: Exception) {
+            null
+        }
+        if (stored == null) return 0
+        var added = 0
+        for (c in stored.conversations) {
+            if (conversations.any { it.id == c.id }) continue
+            if (c.turns.isEmpty() && c.title == DEFAULT_TITLE) continue
+            conversations.add(c)
+            added++
+        }
+        if (added > 0) {
+            publish()
+            save()
+        }
+        return added
+    }
+
     private fun deleteMedia(list: List<ChatTurn>) {
         for (t in list) {
             t.attachments?.forEach { path ->
