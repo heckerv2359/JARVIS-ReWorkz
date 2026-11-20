@@ -4,7 +4,10 @@ import android.content.Context
 import android.speech.tts.TextToSpeech
 import java.util.Locale
 
-/** Reads written replies aloud with Android text to speech. Only used when the user asks for it. */
+/**
+ * Reads written replies aloud with Android text to speech. Only used when the user asks for it.
+ * The voice call session has its own audio path and does not use this.
+ */
 object ChatSpeaker {
 
     private var tts: TextToSpeech? = null
