@@ -58,6 +58,15 @@ class ChatRepository(private val preferences: AppPreferences) {
         if (loaded != null && loaded.conversations.isNotEmpty()) {
             conversations.addAll(loaded.conversations)
             activeId = if (conversations.any { it.id == loaded.activeId }) loaded.activeId else conversations.first().id
+            // A reply that was still streaming when the app was closed can never finish. Mark it stopped
+            // so it shows a Retry button instead of staying on Thinking forever.
+            for (c in conversations) {
+                if (c.turns.any { it.status == ChatStatus.STREAMING }) {
+                    c.turns = c.turns.map { t ->
+                        if (t.status == ChatStatus.STREAMING) t.copy(status = ChatStatus.STOPPED) else t
+                    }
+                }
+            }
         } else {
             val legacy = preferences.loadChatHistory()
             val first = Conversation(
