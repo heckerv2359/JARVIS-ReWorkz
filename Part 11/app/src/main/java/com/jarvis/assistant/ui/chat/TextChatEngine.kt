@@ -3,10 +3,11 @@ package com.jarvis.assistant.ui.chat
 import android.util.Log
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.Job
-import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.awaitCancellation
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
@@ -22,6 +23,8 @@ object TextChatEngine {
 
     private const val TAG = "TextChatEngine"
     private const val BASE = "https://generativelanguage.googleapis.com/v1beta/"
+    private const val MAX_ATTEMPTS = 4
+    private const val MAX_TIMEOUTS = 2
 
     const val KIND_NO_KEY = "NO_KEY"
     const val KIND_KEY = "KEY"
@@ -42,7 +45,7 @@ object TextChatEngine {
 
     private val client = OkHttpClient.Builder()
         .connectTimeout(10, TimeUnit.SECONDS)
-        .readTimeout(75, TimeUnit.SECONDS)
+        .readTimeout(40, TimeUnit.SECONDS)
         .build()
 
     private val MODELS = listOf("gemini-flash-latest", "gemini-3.8-flash", "gemini-flash-lite-latest", "gemini-3.5-flash-lite")
@@ -70,8 +73,9 @@ object TextChatEngine {
         val notes = ArrayList<String>()
         var allNetwork = true
         var attempts = 0
+        var timeouts = 0
 
-        while (queue.isNotEmpty() && attempts < 8) {
+        while (queue.isNotEmpty() && attempts < MAX_ATTEMPTS) {
             ensureActive()
             val model = queue.removeFirst()
             if (!tried.add(model)) continue
@@ -94,6 +98,10 @@ object TextChatEngine {
             }
             notes.add(model + ": " + attempt.message)
             if (!attempt.network) allNetwork = false
+            if (attempt.message.startsWith("SocketTimeoutException")) {
+                timeouts++
+                if (timeouts >= MAX_TIMEOUTS) break
+            }
         }
 
         val kind = if (allNetwork && notes.isNotEmpty()) KIND_NETWORK else KIND_FAILED
@@ -108,17 +116,26 @@ object TextChatEngine {
         text: StringBuilder,
         sources: MutableMap<String, String>,
         onDelta: (String) -> Unit
-    ): Attempt {
+    ): Attempt = coroutineScope {
         val request = Request.Builder()
             .url(BASE + "models/" + model + ":streamGenerateContent?alt=sse")
             .header("x-goog-api-key", apiKey)
             .post(payload)
             .build()
         val call = client.newCall(request)
-        val ctx = currentCoroutineContext()
-        val handle = ctx[Job]?.invokeOnCompletion { call.cancel() }
+
+        // Cancelling the coroutine must abort a call that is blocked on the network right away,
+        // otherwise Stop would only take effect after the read timeout.
+        val watcher = launch {
+            try {
+                awaitCancellation()
+            } finally {
+                call.cancel()
+            }
+        }
+
         try {
-            return call.execute().use { response ->
+            call.execute().use { response ->
                 if (!response.isSuccessful) {
                     val msg = errorMessage(response.body?.string().orEmpty())
                     Log.w(TAG, model + " HTTP " + response.code + ": " + msg)
@@ -135,7 +152,7 @@ object TextChatEngine {
                 var blockReason = ""
                 var finish = ""
                 while (true) {
-                    ctx.ensureActive()
+                    ensureActive()
                     val line = reader.readLine() ?: break
                     if (!line.startsWith("data:")) continue
                     val data = line.substring(5).trim()
@@ -188,11 +205,11 @@ object TextChatEngine {
         } catch (e: CancellationException) {
             throw e
         } catch (e: IOException) {
-            if (!ctx.isActive) throw CancellationException("stopped")
+            if (!isActive) throw CancellationException("stopped")
             Log.w(TAG, model + " failed: " + e.javaClass.simpleName + " " + e.message)
-            return Attempt(false, null, e.javaClass.simpleName + ": " + (e.message ?: "").take(80), true, text.isNotEmpty())
+            Attempt(false, null, e.javaClass.simpleName + ": " + (e.message ?: "").take(80), true, text.isNotEmpty())
         } finally {
-            handle?.dispose()
+            watcher.cancel()
         }
     }
 

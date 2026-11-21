@@ -33,13 +33,31 @@ object ChatController {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private var job: Job? = null
 
+    /** Bumped on every new run and on every stop, so a run that was stopped can never touch the screen again. */
+    @Volatile private var runToken = 0L
+    private var currentTurnId: String? = null
+    private var currentAcc: StringBuilder? = null
+
     private val _generating = MutableStateFlow(false)
     val generating: StateFlow<Boolean> = _generating.asStateFlow()
 
     fun isGenerating(): Boolean = _generating.value
 
+    /** Stops right away: the button and the reply update at once, even if the network call is still unwinding. */
     fun stop() {
+        if (!_generating.value) return
+        val repo = JarvisApp.instance.chatRepository
+        val id = currentTurnId
+        val acc = currentAcc
+        runToken++
         job?.cancel()
+        if (id != null) {
+            val partial = if (acc != null) synchronized(acc) { acc.toString().trim() } else ""
+            repo.updateTurn(id, partial, ChatStatus.STOPPED, true)
+        }
+        currentTurnId = null
+        currentAcc = null
+        _generating.value = false
     }
 
     fun send(context: Context, text: String, attachments: List<String>) {
@@ -104,34 +122,51 @@ object ChatController {
         _generating.value = true
         val app = JarvisApp.instance
         val repo = app.chatRepository
+        runToken++
+        val token = runToken
+        val acc = StringBuilder()
+        currentTurnId = turnId
+        currentAcc = acc
         job = scope.launch {
-            val acc = StringBuilder()
             try {
                 val system = ChatPromptBuilder.build()
                 val body = withContext(Dispatchers.IO) { buildBody(turnId, system) }
                 var lastPush = 0L
                 val result = TextChatEngine.stream(app.preferences.apiKey, body, ChatPrefs.model) { delta ->
-                    acc.append(delta)
+                    val snapshot = synchronized(acc) {
+                        acc.append(delta)
+                        acc.toString()
+                    }
+                    if (token != runToken) return@stream
                     val now = SystemClock.elapsedRealtime()
                     if (now - lastPush > 70L) {
                         lastPush = now
-                        repo.updateTurn(turnId, acc.toString(), ChatStatus.STREAMING, false)
+                        repo.updateTurn(turnId, snapshot, ChatStatus.STREAMING, false)
                     }
                 }
-                finish(appContext, turnId, userText, result)
+                if (token == runToken) finish(appContext, turnId, userText, result)
             } catch (e: CancellationException) {
-                repo.updateTurn(turnId, acc.toString().trim(), ChatStatus.STOPPED, true)
+                if (token == runToken) {
+                    val partial = synchronized(acc) { acc.toString().trim() }
+                    repo.updateTurn(turnId, partial, ChatStatus.STOPPED, true)
+                }
                 throw e
             } catch (e: Exception) {
-                val partial = acc.toString().trim()
-                repo.updateTurn(
-                    turnId,
-                    if (partial.isEmpty()) "Something went wrong. Tap Retry." else partial,
-                    ChatStatus.ERROR,
-                    true
-                )
+                if (token == runToken) {
+                    val partial = synchronized(acc) { acc.toString().trim() }
+                    repo.updateTurn(
+                        turnId,
+                        if (partial.isEmpty()) "Something went wrong. Tap Retry." else partial,
+                        ChatStatus.ERROR,
+                        true
+                    )
+                }
             } finally {
-                _generating.value = false
+                if (token == runToken) {
+                    currentTurnId = null
+                    currentAcc = null
+                    _generating.value = false
+                }
             }
         }
     }
